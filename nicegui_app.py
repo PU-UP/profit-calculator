@@ -135,10 +135,7 @@ def main_page():
             with ui.tab_panel("profit_calc"):
                 from profit_calc.nicegui_calc import render as render_calc
 
-                def on_calc_update():
-                    pass  # 历史已就地修改
-
-                render_calc(hist_t, hist_p2pr, hist_pr2p, on_calc_update)
+                render_calc(hist_t, hist_p2pr, hist_pr2p)
 
             with ui.tab_panel("position_table"):
                 from profit_calc.nicegui_position import render as render_pos

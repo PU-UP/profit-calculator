@@ -65,7 +65,7 @@ def _render_t_detail(b: dict) -> None:
 
 # ── 做T净收益 ────────────────────────────────────────────────────
 
-def _tab_t_profit(history: list[dict], on_update) -> None:
+def _tab_t_profit(history: list[dict]) -> None:
     ui.label("日内做T净收益").classes("text-subtitle1 font-bold")
     ui.label("万3 佣金（单笔最低 5 元）；个股含印花税与过户费，ETF 免收后两项。").classes("text-caption")
 
@@ -114,14 +114,21 @@ def _tab_t_profit(history: list[dict], on_update) -> None:
         result_container.clear()
         with result_container:
             _render_t_detail(b)
-        on_update()
+        refresh_history()
 
     ui.button("计算做T净收益", on_click=compute, color="primary").classes("w-full")
+
+    hist_container = ui.column().classes("w-full")
+
+    def refresh_history() -> None:
+        _bind_history_panel(history, "做T净收益历史", hist_container)
+
+    refresh_history()
 
 
 # ── 涨跌幅 → 目标价 ──────────────────────────────────────────────
 
-def _tab_pct_to_price(history: list[dict], on_update) -> None:
+def _tab_pct_to_price(history: list[dict]) -> None:
     ui.label("涨跌幅 → 目标价").classes("text-subtitle1 font-bold")
     ui.label("高点回撤填负百分比；低点反弹填正百分比。").classes("text-caption")
 
@@ -159,14 +166,21 @@ def _tab_pct_to_price(history: list[dict], on_update) -> None:
         with result_container:
             _big_number("目标价（元）", f"{new_price:.4f}", p)
             ui.label(f"{p:+.4f}% · {hint}").classes("text-caption")
-        on_update()
+        refresh_history()
 
     ui.button("计算目标价", on_click=compute, color="primary").classes("w-full")
+
+    hist_container = ui.column().classes("w-full")
+
+    def refresh_history() -> None:
+        _bind_history_panel(history, "涨跌幅→目标价历史", hist_container)
+
+    refresh_history()
 
 
 # ── 两价 → 涨跌幅 ────────────────────────────────────────────────
 
-def _tab_price_to_pct(history: list[dict], on_update) -> None:
+def _tab_price_to_pct(history: list[dict]) -> None:
     ui.label("两价 → 涨跌幅").classes("text-subtitle1 font-bold")
     ui.label("结束价相对起始价的涨跌百分比（涨为正、跌为负）。").classes("text-caption")
 
@@ -207,14 +221,38 @@ def _tab_price_to_pct(history: list[dict], on_update) -> None:
         with result_container:
             _big_number("相对涨跌幅（%）", f"{p:+.4f}%", p)
             ui.label(label).classes("text-caption")
-        on_update()
+        refresh_history()
 
     ui.button("计算涨跌幅", on_click=compute, color="primary").classes("w-full")
+
+    hist_container = ui.column().classes("w-full")
+
+    def refresh_history() -> None:
+        _bind_history_panel(history, "两价→涨跌幅历史", hist_container)
+
+    refresh_history()
+
+
+def _bind_history_panel(history: list[dict], title: str, container) -> None:
+    """绑定可刷新的历史记录区。"""
+
+    def refresh() -> None:
+        container.clear()
+        with container:
+
+            def on_clear() -> None:
+                history.clear()
+                refresh()
+
+            _render_history(history, title, on_clear)
+
+    refresh()
 
 
 # ── 历史记录 ─────────────────────────────────────────────────────
 
 def _render_history(history: list[dict], title: str, on_clear) -> None:
+    """在容器内绘制历史区（由外层 clear + 重绘刷新）。"""
     ui.separator()
     with ui.row().classes("w-full items-center justify-between"):
         ui.label(title).classes("text-subtitle2 font-bold")
@@ -228,13 +266,13 @@ def _render_history(history: list[dict], title: str, on_clear) -> None:
         {"name": k, "label": k, "field": k, "align": "right" if i > 0 else "left", "sortable": False}
         for i, k in enumerate(history[0].keys())
     ]
-    rows = history[:20]
+    rows = [{**row, "_id": f"{row.get('时间', '')}-{i}"} for i, row in enumerate(history[:20])]
 
     ui.table(
         columns=columns,
         rows=rows,
-        row_key="时间",
-    ).classes("w-full").props('flat dense virtual-scroll')
+        row_key="_id",
+    ).classes("w-full").props("flat dense virtual-scroll")
 
 
 # ── 渲染入口 ─────────────────────────────────────────────────────
@@ -243,9 +281,8 @@ def render(
     hist_t: list[dict],
     hist_p2pr: list[dict],
     hist_pr2p: list[dict],
-    on_update,
 ) -> None:
-    """渲染交易计算器主界面。"""
+    """渲染交易计算器主界面。历史列表由 app.storage.user 传入并在计算后刷新表格。"""
     ui.label("交易计算器").classes("text-h6 font-bold")
     ui.label("做T净收益 · 按涨跌幅推算价格 · 两价算涨跌幅").classes("text-caption q-mb-md")
 
@@ -256,13 +293,10 @@ def render(
 
     with ui.tab_panels(tabs, value="t_profit").classes("w-full"):
         with ui.tab_panel("t_profit"):
-            _tab_t_profit(hist_t, on_update)
-            _render_history(hist_t, "做T净收益历史", lambda: (hist_t.clear(), on_update()))
+            _tab_t_profit(hist_t)
 
         with ui.tab_panel("pct_to_price"):
-            _tab_pct_to_price(hist_p2pr, on_update)
-            _render_history(hist_p2pr, "涨跌幅→目标价历史", lambda: (hist_p2pr.clear(), on_update()))
+            _tab_pct_to_price(hist_p2pr)
 
         with ui.tab_panel("price_to_pct"):
-            _tab_price_to_pct(hist_pr2p, on_update)
-            _render_history(hist_pr2p, "两价→涨跌幅历史", lambda: (hist_pr2p.clear(), on_update()))
+            _tab_price_to_pct(hist_pr2p)
