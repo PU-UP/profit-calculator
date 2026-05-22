@@ -1,0 +1,8 @@
+{
+  "name": "profit-calculator",
+  "private": true,
+  "description": "本地安装 MiniMax 官方 CLI（mmx），供 Python 子进程调用。安装：在项目根目录执行 npm install",
+  "devDependencies": {
+    "mmx-cli": "1.0.13"
+  }
+}

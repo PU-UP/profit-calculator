@@ -1,0 +1,24 @@
+[project]
+name = "profit-calculator"
+version = "0.1.0"
+description = "A股/ETF 做T净收益估算、涨跌幅换算；根目录 streamlit run streamlit_app.py（profit_calc + position_table）；MiniMax 本地脚本。"
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.38.0",
+    "python-dotenv>=1.0.1",
+    "pandas>=2.2.0",
+]
+
+[project.scripts]
+start = "profit_calc.serve:main"
+t-net-profit = "profit_calc.t_net_profit:main"
+price-to-pct = "profit_calc.price_to_pct:main"
+pct-to-price = "profit_calc.pct_to_price:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["profit_calc*"]
