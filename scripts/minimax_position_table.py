@@ -2,7 +2,7 @@
 """
 从持仓截图识别各标的金额与占比（CLI）。
 
-依赖：项目根目录 .env（MINIMAX_API_KEY、MINIMAX_REGION=cn）、npm install 后的 mmx CLI。
+依赖：项目根目录 .env（MINIMAX_API_KEY、MINIMAX_REGION=cn）；通过 Python httpx 调用 MiniMax API。
 
 用法（在项目根目录）::
 

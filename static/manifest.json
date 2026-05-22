@@ -1,0 +1,21 @@
+{
+  "name": "交易小算盘",
+  "short_name": "小算盘",
+  "description": "做T净收益 · 仓位占比 · 涨跌幅计算",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1976d2",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

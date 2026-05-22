@@ -1,4 +1,8 @@
-"""从持仓截图经 mmx vision + text 动态解析标的金额，并汇总占比。"""
+"""从持仓截图经 MiniMax vision + text 动态解析标的金额，并汇总占比。
+
+默认优先 mmx CLI（与原 Streamlit 一致）；无 mmx 时回退 httpx。
+可通过环境变量 MINIMAX_BACKEND=mmx|httpx|auto 强制选择（默认 auto）。
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,9 @@ from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
+
+from profit_calc.minimax_client import load_config, text_chat
+from profit_calc.minimax_client import vision_transcribe as _api_vision_transcribe
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUBPROC_TEXT_KW = {"encoding": "utf-8", "errors": "replace"}
@@ -93,15 +100,19 @@ def _find_mmx() -> str | None:
     return shutil.which("mmx")
 
 
+def _use_mmx_backend() -> bool:
+    mode = (os.getenv("MINIMAX_BACKEND") or "auto").strip().lower()
+    if mode == "httpx":
+        return False
+    if mode == "mmx":
+        if not _find_mmx():
+            raise RuntimeError("MINIMAX_BACKEND=mmx 但未找到 mmx，请在项目根目录执行 npm install。")
+        return True
+    return _find_mmx() is not None
+
+
 def _mmx_prefix(mmx: str, api_key: str, region: str, base_url: str | None) -> list[str]:
-    cmd = [
-        mmx,
-        "--api-key",
-        api_key,
-        "--region",
-        region,
-        "--non-interactive",
-    ]
+    cmd = [mmx, "--api-key", api_key, "--region", region, "--non-interactive"]
     if base_url:
         cmd.extend(["--base-url", base_url])
     return cmd
@@ -132,6 +143,102 @@ def _parse_vision_content(data: dict[str, Any]) -> str:
     if isinstance(c, str) and c.strip():
         return c.strip()
     raise RuntimeError(f"vision 响应无 content：{json.dumps(data, ensure_ascii=False)[:800]}")
+
+
+def _load_mmx_env() -> tuple[str, str, str, str | None, dict[str, str]]:
+    load_dotenv(REPO_ROOT / ".env")
+    api_key = (os.getenv("MINIMAX_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("未设置 MINIMAX_API_KEY（请在 .env 中配置）。")
+
+    mmx = (os.getenv("MINIMAX_MMX_BIN") or "").strip() or (_find_mmx() or "")
+    if not mmx:
+        raise RuntimeError("未找到 mmx，请在项目根目录执行 npm install。")
+
+    region = (os.getenv("MINIMAX_REGION") or "cn").strip().lower()
+    if region not in ("cn", "global"):
+        region = "cn"
+    base_url = (os.getenv("MINIMAX_BASE_URL") or "").strip() or None
+
+    env = os.environ.copy()
+    env.pop("MINIMAX_API_KEY", None)
+    return api_key, mmx, region, base_url, env
+
+
+def _vision_transcribe_mmx(
+    mmx: str,
+    prefix: list[str],
+    env: dict[str, str],
+    image: Path,
+    timeout: int,
+) -> str:
+    cmd = [
+        *prefix,
+        "--timeout",
+        str(timeout),
+        "--output",
+        "json",
+        "vision",
+        "describe",
+        "--image",
+        str(image.resolve()),
+        "--prompt",
+        VISION_TRANSCRIBE_PROMPT,
+    ]
+    proc = _run_mmx(cmd, cwd=REPO_ROOT, env=env, timeout=timeout + 30)
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or out or f"exit {proc.returncode}")[:4000])
+    data = json.loads(out) if out else {}
+    if not isinstance(data, dict):
+        raise RuntimeError(out[:2000])
+    return _parse_vision_content(data)
+
+
+def _text_extract_parsed_mmx(
+    mmx: str,
+    prefix: list[str],
+    env: dict[str, str],
+    transcript: str,
+    timeout: int,
+) -> dict[str, Any]:
+    user_body = "【截图转写】\n" + transcript + "\n\n请输出要求的 JSON。"
+    messages = [
+        {"role": "system", "content": TEXT_SYSTEM},
+        {"role": "user", "content": user_body},
+    ]
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".json",
+        delete=False,
+    ) as f:
+        json.dump(messages, f, ensure_ascii=False)
+        msg_path = f.name
+    try:
+        cmd = [
+            *prefix,
+            "--timeout",
+            str(timeout),
+            "--output",
+            "json",
+            "--temperature",
+            "0.1",
+            "text",
+            "chat",
+            "--messages-file",
+            msg_path,
+        ]
+        proc = _run_mmx(cmd, cwd=REPO_ROOT, env=env, timeout=timeout + 60)
+        out = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or out or f"exit {proc.returncode}")[:4000])
+        return _parse_text_chat_json(out)
+    finally:
+        try:
+            Path(msg_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _first_balanced_json_object(text: str) -> str | None:
@@ -245,110 +352,23 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     ) from last_err
 
 
-def _load_mmx_env() -> tuple[str, str, str, str | None, dict[str, str]]:
-    load_dotenv(REPO_ROOT / ".env")
-    api_key = (os.getenv("MINIMAX_API_KEY") or "").strip()
-    if not api_key:
-        raise RuntimeError("未设置 MINIMAX_API_KEY（请在 .env 中配置）。")
-
-    mmx = (os.getenv("MINIMAX_MMX_BIN") or "").strip() or (_find_mmx() or "")
-    if not mmx:
-        raise RuntimeError("未找到 mmx，请在项目根目录执行 npm install。")
-
-    region = (os.getenv("MINIMAX_REGION") or "cn").strip().lower()
-    if region not in ("cn", "global"):
-        region = "cn"
-    base_url = (os.getenv("MINIMAX_BASE_URL") or "").strip() or None
-
-    env = os.environ.copy()
-    env.pop("MINIMAX_API_KEY", None)
-    return api_key, mmx, region, base_url, env
-
-
 def vision_transcribe(
     image: Path,
     *,
     timeout_vision: int = 120,
 ) -> str:
-    api_key, mmx, region, base_url, env = _load_mmx_env()
-    prefix = _mmx_prefix(mmx, api_key, region, base_url)
-    return _vision_transcribe(mmx, prefix, env, image, timeout_vision)
-
-
-def _vision_transcribe(
-    mmx: str,
-    prefix: list[str],
-    env: dict[str, str],
-    image: Path,
-    timeout: int,
-) -> str:
-    cmd = [
-        *prefix,
-        "--timeout",
-        str(timeout),
-        "--output",
-        "json",
-        "vision",
-        "describe",
-        "--image",
-        str(image.resolve()),
-        "--prompt",
-        VISION_TRANSCRIBE_PROMPT,
-    ]
-    proc = _run_mmx(cmd, cwd=REPO_ROOT, env=env, timeout=timeout + 30)
-    out = (proc.stdout or "").strip()
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or out or f"exit {proc.returncode}")[:4000])
-    data = json.loads(out) if out else {}
-    if not isinstance(data, dict):
-        raise RuntimeError(out[:2000])
-    return _parse_vision_content(data)
-
-
-def _text_extract_parsed(
-    mmx: str,
-    prefix: list[str],
-    env: dict[str, str],
-    transcript: str,
-    timeout: int,
-) -> dict[str, Any]:
-    user_body = "【截图转写】\n" + transcript + "\n\n请输出要求的 JSON。"
-    messages = [
-        {"role": "system", "content": TEXT_SYSTEM},
-        {"role": "user", "content": user_body},
-    ]
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        suffix=".json",
-        delete=False,
-    ) as f:
-        json.dump(messages, f, ensure_ascii=False)
-        msg_path = f.name
-    try:
-        cmd = [
-            *prefix,
-            "--timeout",
-            str(timeout),
-            "--output",
-            "json",
-            "--temperature",
-            "0.1",
-            "text",
-            "chat",
-            "--messages-file",
-            msg_path,
-        ]
-        proc = _run_mmx(cmd, cwd=REPO_ROOT, env=env, timeout=timeout + 60)
-        out = (proc.stdout or "").strip()
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or out or f"exit {proc.returncode}")[:4000])
-        return _parse_text_chat_json(out)
-    finally:
-        try:
-            Path(msg_path).unlink(missing_ok=True)
-        except OSError:
-            pass
+    """Vision 转写（供 CLI --print-transcript 等）。"""
+    if _use_mmx_backend():
+        api_key, mmx, region, base_url, env = _load_mmx_env()
+        prefix = _mmx_prefix(mmx, api_key, region, base_url)
+        return _vision_transcribe_mmx(mmx, prefix, env, image, timeout_vision)
+    config = load_config(REPO_ROOT / ".env")
+    return _api_vision_transcribe(
+        image,
+        prompt=VISION_TRANSCRIBE_PROMPT,
+        timeout=timeout_vision,
+        config=config,
+    )
 
 
 def _format_label(name: str, code: Any) -> str:
@@ -612,11 +632,31 @@ def extract_holdings_from_image(
     if not image.is_file():
         raise FileNotFoundError(f"图片不存在：{image}")
 
-    api_key, mmx, region, base_url, env = _load_mmx_env()
-    prefix = _mmx_prefix(mmx, api_key, region, base_url)
-
-    transcript = _vision_transcribe(mmx, prefix, env, image, timeout_vision)
-    parsed = _text_extract_parsed(mmx, prefix, env, transcript, timeout_text)
+    if _use_mmx_backend():
+        api_key, mmx, region, base_url, env = _load_mmx_env()
+        prefix = _mmx_prefix(mmx, api_key, region, base_url)
+        transcript = _vision_transcribe_mmx(mmx, prefix, env, image, timeout_vision)
+        parsed = _text_extract_parsed_mmx(mmx, prefix, env, transcript, timeout_text)
+    else:
+        config = load_config(REPO_ROOT / ".env")
+        transcript = _api_vision_transcribe(
+            image,
+            prompt=VISION_TRANSCRIBE_PROMPT,
+            timeout=timeout_vision,
+            config=config,
+        )
+        user_body = "【截图转写】\n" + transcript + "\n\n请输出要求的 JSON。"
+        messages = [
+            {"role": "system", "content": TEXT_SYSTEM},
+            {"role": "user", "content": user_body},
+        ]
+        raw_text = text_chat(
+            messages,
+            temperature=0.1,
+            timeout=timeout_text,
+            config=config,
+        )
+        parsed = _extract_json_object(raw_text)
     return summarize_holdings(parsed)
 
 

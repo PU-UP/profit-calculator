@@ -1,16 +1,20 @@
 [project]
 name = "profit-calculator"
 version = "0.1.0"
-description = "A股/ETF 做T净收益估算、涨跌幅换算；根目录 streamlit run streamlit_app.py（profit_calc + position_table）；MiniMax 本地脚本。"
+description = "A股/ETF 做T净收益估算、涨跌幅换算；Streamlit 与 NiceGUI 双 Web 入口；仓位识别支持 MiniMax Python API。"
 requires-python = ">=3.11"
 dependencies = [
     "streamlit>=1.38.0",
+    "nicegui>=2.0",
+    "httpx>=0.27",
     "python-dotenv>=1.0.1",
     "pandas>=2.2.0",
+    "Pillow>=10.0",
 ]
 
 [project.scripts]
 start = "profit_calc.serve:main"
+start-nicegui = "profit_calc.serve_nicegui:main"
 t-net-profit = "profit_calc.t_net_profit:main"
 price-to-pct = "profit_calc.price_to_pct:main"
 pct-to-price = "profit_calc.pct_to_price:main"
