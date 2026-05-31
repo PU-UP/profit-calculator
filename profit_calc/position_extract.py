@@ -12,14 +12,14 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
 
-from profit_calc.minimax_client import load_config, text_chat
+from profit_calc.minimax_client import load_config, resolve_vision_api, text_chat, vision_api_label
 from profit_calc.minimax_client import vision_transcribe as _api_vision_transcribe
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +89,63 @@ class PositionSummary:
     df: pd.DataFrame
     checks: list[str] = field(default_factory=list)
     position_pct_reported: float | None = None
+    backend: str = ""
+    backend_mode: str = ""
+    region: str = ""
+    api_key_hint: str = ""
+    transcript_chars: int = 0
+    holdings_raw_count: int = 0
+    vision_api: str = ""
+    transcript_preview: str = ""
+
+
+def _api_key_hint() -> str:
+    key = (os.getenv("MINIMAX_API_KEY") or "").strip()
+    if not key:
+        return "未配置"
+    if len(key) <= 8:
+        return f"已配置（{len(key)} 字符）"
+    return f"{key[:4]}…{key[-4:]}（{len(key)} 字符）"
+
+
+def describe_recognition_backend() -> dict[str, str]:
+    """供 UI 展示：当前将使用的识别后端与环境（不调用 API）。"""
+    load_dotenv(REPO_ROOT / ".env", override=False)
+    mode = (os.getenv("MINIMAX_BACKEND") or "auto").strip().lower()
+    mmx_path = (os.getenv("MINIMAX_MMX_BIN") or "").strip() or (_find_mmx() or "")
+    region = (os.getenv("MINIMAX_REGION") or "cn").strip().lower()
+    if region not in ("cn", "global"):
+        region = "cn"
+    base_url = (os.getenv("MINIMAX_BASE_URL") or "").strip()
+
+    if mode == "httpx":
+        backend = "httpx"
+        mode_desc = "httpx（MINIMAX_BACKEND=httpx）"
+    elif mode == "mmx":
+        if mmx_path:
+            backend = "mmx"
+            mode_desc = f"mmx（MINIMAX_BACKEND=mmx，{mmx_path}）"
+        else:
+            backend = "—"
+            mode_desc = "mmx（已强制但未找到 mmx CLI）"
+    elif mmx_path:
+        backend = "mmx"
+        mode_desc = f"auto → mmx（{mmx_path}）"
+    else:
+        backend = "httpx"
+        mode_desc = "auto → httpx（无 mmx CLI，使用 Python 图文 API）"
+
+    api_key = (os.getenv("MINIMAX_API_KEY") or "").strip()
+    info: dict[str, str] = {
+        "识别后端": backend,
+        "后端选择": mode_desc,
+        "MINIMAX_REGION": region,
+        "API Key": _api_key_hint(),
+        "Vision API": vision_api_label(resolve_vision_api(api_key)) if api_key else "—",
+    }
+    if base_url:
+        info["MINIMAX_BASE_URL"] = base_url
+    return info
 
 
 def _find_mmx() -> str | None:
@@ -657,7 +714,25 @@ def extract_holdings_from_image(
             config=config,
         )
         parsed = _extract_json_object(raw_text)
-    return summarize_holdings(parsed)
+
+    holdings_raw = parsed.get("holdings")
+    holdings_raw_count = len(holdings_raw) if isinstance(holdings_raw, list) else 0
+    diag = describe_recognition_backend()
+    summary = summarize_holdings(parsed)
+    preview = transcript.strip()
+    if len(preview) > 200:
+        preview = preview[:200] + "…"
+    return replace(
+        summary,
+        backend=diag["识别后端"],
+        backend_mode=diag["后端选择"],
+        region=diag["MINIMAX_REGION"],
+        api_key_hint=diag["API Key"],
+        transcript_chars=len(transcript),
+        holdings_raw_count=holdings_raw_count,
+        vision_api=diag.get("Vision API", ""),
+        transcript_preview=preview,
+    )
 
 
 def format_holdings_table(summary: PositionSummary) -> str:

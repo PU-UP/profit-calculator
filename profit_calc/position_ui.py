@@ -10,7 +10,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from profit_calc.position_extract import extract_holdings_from_image
+from profit_calc.position_extract import describe_recognition_backend, extract_holdings_from_image
 
 K_POS_RESULT = "position_table_result"
 
@@ -41,6 +41,9 @@ def render() -> None:
             step=10,
             key="pos_timeout_text",
         )
+        with st.expander("识别环境", expanded=False):
+            for label, value in describe_recognition_backend().items():
+                st.caption(f"{label}：{value}")
 
     uploaded = st.file_uploader(
         "持仓截图",
@@ -68,6 +71,9 @@ def render() -> None:
             st.session_state[K_POS_RESULT] = summary
         except Exception as e:
             st.error(str(e))
+            with st.expander("识别环境（出错时）", expanded=True):
+                for label, value in describe_recognition_backend().items():
+                    st.write(f"**{label}**：{value}")
         finally:
             try:
                 tmp_path.unlink(missing_ok=True)
@@ -99,8 +105,20 @@ def render() -> None:
         styled = df.style.format(fmt, na_rep="—")
         st.dataframe(styled, hide_index=True, width="stretch")
 
-    if result.checks:
-        with st.expander("校验结果", expanded=any(c.startswith("⚠") for c in result.checks)):
+    expand_diag = df.empty or any(c.startswith("⚠") for c in result.checks)
+    with st.expander("识别诊断", expanded=expand_diag):
+        st.write(f"**识别后端**：{result.backend or '—'}")
+        st.write(f"**后端选择**：{result.backend_mode or '—'}")
+        st.write(f"**MINIMAX_REGION**：{result.region or '—'}")
+        st.write(f"**API Key**：{result.api_key_hint or '—'}")
+        st.write(f"**Vision API**：{result.vision_api or '—'}")
+        st.write(f"**Vision 转写字数**：{result.transcript_chars}")
+        if result.transcript_preview and (df.empty or result.transcript_chars < 120):
+            st.write(f"**Vision 转写预览**：{result.transcript_preview}")
+        st.write(f"**模型返回 holdings 条数**：{result.holdings_raw_count}")
+        st.write(f"**有效持仓行数**：{len(result.df)}")
+        if result.checks:
+            st.markdown("**校验结果**")
             for line in result.checks:
                 st.write(line)
 
